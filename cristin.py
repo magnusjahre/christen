@@ -94,13 +94,11 @@ class Paper:
                     self.level = int(qualitydata.find("kode").text)
 
         elif self.type == "RAPPORT":
-            if not (self.subtype == "DRGRADAVH" or self.subtype == "RAPPORT"):
-                assert False, self.title+" is not a PhD Thesis or report"
-            if self.subtype == self.subtype == "DRGRADAVH":
+            if self.subtype == "DRGRADAVH":
                 self.journal = "Doctoral Dissertation at NTNU"
                 # This is a hack: PhD theses count towards RBO and thus should be included but are technically not level 1
                 self.level = 1  
-            else:
+            elif self.subtype == "RAPPORT":
                 text = "Technical Report"
                 try:
                     text += ": "+categorydata.find("bokRapport").find("utgiver").find("navn").text
