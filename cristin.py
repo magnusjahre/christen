@@ -8,8 +8,6 @@ from urllib import urlopen
 import xml.etree.ElementTree as ET
 from optparse import OptionParser
 
-filtercategories = ["FOREDRAG", "MEDIEBIDRAG", "KOMMERSIALISERIN", "PRODUKT"]
-filtersubcategories = ["ARTIKKEL_POP", "KOMPENDIUM", "INTERVJU", "MASTERGRADSOPPG", "HOVEDFAGSOPPGAVE"]
 typelist = ["html-onefile", "html-yearfiles", "console"]
 
 L2_KEY = "LEVEL2"
@@ -55,23 +53,6 @@ def parseArgs():
         sys.exit()
 
     return options, args
-
-
-def skipElement(element):
-
-    pubtype = element.find("kategori").find("hovedkategori").find("kode").text
-    pubsubtype = element.find("kategori").find("underkategori").find("kode").text
-
-    skip = False
-    for f in filtercategories:
-        if pubtype == f:
-            skip = True
-
-    for f in filtersubcategories:
-        if pubsubtype == f:
-            skip = True
-
-    return skip
 
 class Author:
 
@@ -138,8 +119,6 @@ class Paper:
                 self.journal = utgiver.find("navn").text
             else:
                 assert False, "Could not determine book publisher for title "+self.title
-        else:
-            assert False, "Unknown paper type "+self.type+" for title "+self.title
 
         authorelem = element.findall("person")
         self.authors = [None for i in range(len(list(authorelem)))]
@@ -225,26 +204,22 @@ def addPapers(name, papers, years, pt, addAllPapers):
     for resResult in list(element):
         if resResult.tag == "forskningsresultat":
             data = resResult.find("fellesdata")
-            if not skipElement(data):
-                categorydata = resResult.find("kategoridata")
-                paper = Paper(data, categorydata)
-                
-                if paper.ident not in papers:
-                    if addAllPapers:
-                        papers[paper.ident] = paper
-                    else:
-                        if paper.level > 0:
-                            papers[paper.ident] = paper    
+            categorydata = resResult.find("kategoridata")
+            paper = Paper(data, categorydata)
+            
+            if paper.ident not in papers:
+                if addAllPapers:
+                    papers[paper.ident] = paper
+                else:
+                    if paper.level > 0:
+                        papers[paper.ident] = paper    
 
-                if paper.year not in years:
-                    years.append(paper.year)
+            if paper.year not in years:
+                years.append(paper.year)
 
     return papers, years
 
 def printHTMLHeader(outfile):
-    #print >> outfile, "<?php"
-    #print >> outfile, "header('Content-Type: text/html; charset=utf-8');"
-    #print >> outfile, "?>"
     print >> outfile, "<html>"
     print >> outfile, "<head>"
     print >> outfile, "<title>Publications</title>"
