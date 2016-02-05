@@ -113,10 +113,18 @@ class Paper:
             comdata = part.find("forskningsresultat").find("fellesdata") 
             self.journal = comdata.find("tittel").text
             publisherdata = part.find("forskningsresultat").find("kategoridata").find("bokRapport").find("forlag")
+            seriesdata = part.find("forskningsresultat").find("kategoridata").find("bokRapport").find("serie")
+
             if publisherdata != None:
                 qualitydata = publisherdata.find("kvalitetsniva")
                 if qualitydata != None:
                     self.level = int(qualitydata.find("kode").text)
+                    
+            if seriesdata != None:
+                qualitydata = seriesdata.find("kvalitetsniva")
+                if qualitydata != None:
+                    newlevel = int(qualitydata.find("kode").text)
+                    self.level = max(self.level, newlevel)
 
         elif self.type == "RAPPORT":
             if self.subtype == "DRGRADAVH":
