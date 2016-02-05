@@ -193,7 +193,7 @@ class Paper:
         print >> outfile, self.getAuthorString()
         print >> outfile, self.title
         print >> outfile, self.journal, "(Level "+str(self.level)+")",
-        print >> outfile,""
+        print >> outfile,"\n"
 
     def printHTML(self, outfile):
         print >> outfile, self.getAuthorString().encode("utf-8")+"<br>"
@@ -278,6 +278,9 @@ def printPapers(papers, years, printtype, outfile, titlepattern):
     
     sortedpapers = sorted(papers.values())
 
+    if printtype == typelist[CONSOLE]:
+        print >> outfile, ""
+
     for y in years:
         if matchcnt(y, papers, titlepattern) == 0:
             continue
@@ -290,7 +293,7 @@ def printPapers(papers, years, printtype, outfile, titlepattern):
         if printtype == typelist[HTML_ONEFILE] or printtype == typelist[HTML_YEARFILE]:
             print >> outfile, '<b style="font-size: 12pt">'+str(y)+'</b><br><br><i>'
         else:
-            print>> outfile, y
+            print>> outfile, "==== "+str(y)+" ====================================================================================\n"
         
         for paper in sortedpapers:
             if paper.year == y and match(paper.title, titlepattern):
@@ -301,8 +304,6 @@ def printPapers(papers, years, printtype, outfile, titlepattern):
 
         if printtype == typelist[HTML_ONEFILE] or printtype == typelist[HTML_YEARFILE]:
             print >> outfile, "</i><br>"
-        else:
-            print >> outfile, ""
             
         if printtype == typelist[HTML_YEARFILE]:
             outfile.close()
