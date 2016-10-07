@@ -1,38 +1,18 @@
-#!/usr/bin/python
+#! /usr/bin/python
 # coding=utf8
 
-# Copyright (c) 2015, Norwegian University of Science and Technology (NTNU)
-# All rights reserved.
-# 
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#     * Redistributions of source code must retain the above copyright
-#       notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above copyright
-#       notice, this list of conditions and the following disclaimer in the
-#       documentation and/or other materials provided with the distribution.
-#     * Neither the name of NTNU nor the names of its contributors may be used 
-#       to endorse or promote products derived from this software without 
-#       specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL NTNU BE LIABLE FOR ANY
-# DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-# ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-# SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
+import locale
 import sys
 import re
 import time
+import requests
+from cgi import escape as html_escape
 from urllib import urlopen
 import xml.etree.ElementTree as ET
 from optparse import OptionParser
 
+filtercategories = ["FOREDRAG", "MEDIEBIDRAG", "KOMMERSIALISERIN", "PRODUKT"]
+filtersubcategories = ["ARTIKKEL_POP", "KOMPENDIUM", "INTERVJU", "MASTERGRADSOPPG", "HOVEDFAGSOPPGAVE"]
 typelist = ["html-onefile", "html-yearfiles", "console"]
 
 L2_KEY = "LEVEL2"
@@ -52,7 +32,7 @@ CONSOLE = 2
 def parseArgs():
       
     parser = OptionParser(usage="usage: cristin.py [options] username [username ...]")
-    parser.add_option("-o", "--outfile", dest="filename", default="papers.php",
+    parser.add_option("-o", "--outfile", dest="filename", default="papers.txt",
                   help="write output to FILE")
     parser.add_option("-t", "--output-type", dest="type", default=typelist[CONSOLE],
                   help="output type, alternatives "+str(typelist))
@@ -64,6 +44,8 @@ def parseArgs():
                   help="print paper statistics to STATFILE")
     parser.add_option("--all", dest="all", action="store_true", default=False,
                   help="Print all publications in the database (Default: only Cristin level 1 and 2)")
+    parser.add_option("-l", "--language", dest="lang", default="en",
+                  help="output language: 'no' or 'en'")
     
 
     (options, args) = parser.parse_args()
@@ -74,10 +56,30 @@ def parseArgs():
         sys.exit()
         
     if options.type not in typelist:
-        print "Unknown type "+options.type+", alternatives are "+str(typelist)
+        print >> sys.stderr, u"Unknown type " + options.type + ", alternatives are " + str(typelist)
         sys.exit()
 
+    if options.lang not in ('en', 'no'):
+        print sys.stderr, u"Unknown language code: '%s'" % options.lang
+
     return options, args
+
+
+def skipElement(element):
+
+    pubtype = element.find("kategori").find("hovedkategori").find("kode").text
+    pubsubtype = element.find("kategori").find("underkategori").find("kode").text
+
+    skip = False
+    for f in filtercategories:
+        if pubtype == f:
+            skip = True
+
+    for f in filtersubcategories:
+        if pubsubtype == f:
+            skip = True
+
+    return skip
 
 class Author:
 
@@ -90,7 +92,7 @@ class Author:
         print str(self.order)+" "+self.firstname+" "+self.surname
 
 class Paper:
-    def __init__(self, element, categorydata):
+    def __init__(self, element, categorydata, lang):
         self.year = int(element.find("ar").text)
         self.ident = int(element.find("id").text)
         self.title = element.find("tittel").text
@@ -105,34 +107,32 @@ class Paper:
             self.journal = journaldata.find("navn").text
             qualitylevel = journaldata.find("kvalitetsniva")
             if qualitylevel != None:
-                self.level = int(qualitylevel.find("kode").text)
-            self.journal = self.journal.replace(" = Lecture notes in artificial intelligence", "")
+                self.level = int(qualitylevel.find("kode").text.rstrip("A"))
 
         elif self.type == "BOKRAPPORTDEL":
             part = categorydata.find("bokRapportDel").find("delAv")
             comdata = part.find("forskningsresultat").find("fellesdata") 
             self.journal = comdata.find("tittel").text
-            publisherdata = part.find("forskningsresultat").find("kategoridata").find("bokRapport").find("forlag")
-            seriesdata = part.find("forskningsresultat").find("kategoridata").find("bokRapport").find("serie")
-
+            report = part.find("forskningsresultat").find("kategoridata").find("bokRapport")
+            publisherdata = report.find("forlag")
+            if publisherdata is None:
+                publisherdata = report.find("serie")
+                if publisherdata is not None:
+                    qualitydata = publisherdata.find("kvalitetsniva")
             if publisherdata != None:
                 qualitydata = publisherdata.find("kvalitetsniva")
                 if qualitydata != None:
                     self.level = int(qualitydata.find("kode").text)
-                    
-            if seriesdata != None:
-                qualitydata = seriesdata.find("kvalitetsniva")
-                if qualitydata != None:
-                    newlevel = int(qualitydata.find("kode").text)
-                    self.level = max(self.level, newlevel)
 
         elif self.type == "RAPPORT":
+            if not (self.subtype == "DRGRADAVH" or self.subtype == "RAPPORT"):
+                assert False, self.title+" is not a PhD Thesis or report"
             if self.subtype == "DRGRADAVH":
-                self.journal = "Doctoral Dissertation at NTNU"
+                self.journal = "Doktorgradsavhandling" if lang == 'no' else "Doctoral Dissertation"
                 # This is a hack: PhD theses count towards RBO and thus should be included but are technically not level 1
                 self.level = 1  
-            elif self.subtype == "RAPPORT":
-                text = "Technical Report"
+            else:
+                text = "Teknisk rapport" if lang == 'no' else "Technical Report"
                 try:
                     text += ": "+categorydata.find("bokRapport").find("utgiver").find("navn").text
                 except:
@@ -150,6 +150,8 @@ class Paper:
                 self.journal = utgiver.find("navn").text
             else:
                 assert False, "Could not determine book publisher for title "+self.title
+        else:
+            print >> sys.stderr, (u"Unknown paper type %s for title %s" % (self.type, self.title)).encode('utf-8')
 
         authorelem = element.findall("person")
         self.authors = [None for i in range(len(list(authorelem)))]
@@ -188,41 +190,58 @@ class Paper:
         for a in self.authors:
             a.dump()
     
-    def getAuthorString(self):
-        outstr = self.authors[0].firstname+" "+self.authors[0].surname
+    def getAuthorString(self, lang):
+        outstr = self.authors[0].firstname + " " + self.authors[0].surname
         for a in self.authors[1:len(self.authors)-1]:
-            outstr += ", "+a.firstname+" "+a.surname
+            outstr += ", " + a.firstname + " " + a.surname
         if len(self.authors) > 1:
-            outstr += " and "+self.authors[-1].firstname+" "+self.authors[-1].surname
+            and_ = " og " if lang == 'no' else " and "
+            outstr += and_ + self.authors[-1].firstname + " " + self.authors[-1].surname
         return outstr
 
 
-    def printConsole(self, outfile):
-        print >> outfile, self.getAuthorString()
-        print >> outfile, self.title
-        print >> outfile, self.journal, "(Level "+str(self.level)+")",
-        print >> outfile,"\n"
+    def printConsole(self, outfile, lang):
+        print >> outfile, self.getAuthorString(lang).encode('utf-8')
+        print >> outfile, self.title.encode('utf-8')
+        print >> outfile, self.journal.encode('utf-8'), "(Level " + str(self.level) + ")",
+        print >> outfile,""
 
-    def printHTML(self, outfile):
-        print >> outfile, self.getAuthorString().encode("utf-8")+"<br>"
+    def printHTML(self, outfile, lang):
+        print >> outfile, "<p>"
+        print >> outfile, html_escape(self.getAuthorString(lang)).encode("utf-8") + "<br />"
         if self.url != None:
-            print >> outfile,  "<b><a href="+self.url+">"+self.title.encode("utf-8")+"</a></b><br>"
+            # Check if the URL is OK before generating an HTML link.
+            try:
+                r = requests.head(self.url, timeout=5)
+                # Uncomment the next line to print HTTP status codes for all URLs. 
+                # print >> sys.stderr, r.status_code, self.url
+                if r.status_code >= 400:
+                    print >> sys.stderr, "URL '%s' failed with status code %d" % (self.url, r.status_code)
+                else:
+                    link = "<strong><a href='%s'>" % html_escape(self.url)
+                    link += html_escape(self.title).encode("utf-8")
+                    link += "</a></strong><br />"
+                    print >> outfile, link
+            except requests.exceptions.ConnectionError:
+                print >> sys.stderr, "Connection refused for url '%s'" % self.url
+            except requests.exceptions.RequestException:
+                print >> sys.stderr, "Invalid URL: '%s'" % self.url
         else:
-            print >> outfile,  "<b>"+self.title.encode("utf-8")+"</b><br>"
-        print >> outfile,  self.journal.encode("utf-8")+"<br>"
-        print >> outfile,  "<br>"
+            print >> outfile, "<strong>" + html_escape(self.title).encode("utf-8") + "</strong><br />"
+        print >> outfile, "<em>" + html_escape(self.journal).encode("utf-8") + "</em><br />"
+        print >> outfile, "</p>"
         
     def __cmp__(self, other):
         if self.authors[0].surname == other.authors[0].surname:
             return cmp(self.ident, other.ident)
         return cmp(self.authors[0].surname, other.authors[0].surname)
 
-def addPapers(name, papers, years, pt, addAllPapers):
+def addPapers(name, papers, years, pt, addAllPapers, lang):
     url = "http://cristin.no/ws/hentVarbeiderPerson?"
     url += "navn="+name+"&"
     url += "eierkode=NTNU"
 
-    print "Retriving papers for user "+name+" at url "+url+"..."
+    print "Retriving papers for user %s" % name
 
     data = urlopen(url).read()
     try:
@@ -235,33 +254,45 @@ def addPapers(name, papers, years, pt, addAllPapers):
     for resResult in list(element):
         if resResult.tag == "forskningsresultat":
             data = resResult.find("fellesdata")
-            categorydata = resResult.find("kategoridata")
-            paper = Paper(data, categorydata)
-            
-            if paper.ident not in papers:
-                if addAllPapers:
-                    papers[paper.ident] = paper
-                else:
-                    if paper.level > 0:
-                        papers[paper.ident] = paper    
+            if not skipElement(data):
+                categorydata = resResult.find("kategoridata")
+                paper = Paper(data, categorydata, lang)
+ 
+                if paper.ident not in papers:
+                    if addAllPapers:
+                        papers[paper.ident] = paper
+                    else:
+                        if paper.level > 0:
+                            papers[paper.ident] = paper    
 
-            if paper.year not in years:
-                years.append(paper.year)
+                if paper.year not in years:
+                    years.append(paper.year)
 
     return papers, years
 
-def printHTMLHeader(outfile):
-    print >> outfile, "<html>"
+def printHTMLHeader(outfile, lang):
+    print >> outfile, '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">'
+    print >> outfile, '<html xmlns="http://www.w3.org/1999/xhtml">'
     print >> outfile, "<head>"
-    print >> outfile, "<title>Publications</title>"
-    print >> outfile, '<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>'
+    print >> outfile, '<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />'
+    if lang == 'en':
+        print >> outfile, "<title>Publications</title>"
+    elif lang == 'no':
+        print >> outfile, "<title>Publikasjoner</title>"
     print >> outfile, "</head>"
     print >> outfile, "<body>"
     
-def printHTMLFooter(outfile):
-    print >> outfile,"<i>Publication list generated "+time.strftime("%d.%m.%Y %H:%M")+"</i><br><br>"
-    print >> outfile,"</body>"
-    print >> outfile,"</html>"
+def printHTMLFooter(outfile, lang):
+    if lang == 'en':
+        text = "Publication list generated with data from "
+    elif lang == 'no':
+        text = "Publikasjonslista er laget med data hentet fra "
+        locale.setlocale(locale.LC_TIME, "nb_NO")
+
+    print >> outfile, text + "<p><small><a href='https://www.ntnu.no/cristin'>Cristin</a> " +\
+                      time.strftime("%d. %B %Y").lstrip('0') + ".</small></p>"
+    print >> outfile, "</body>"
+    print >> outfile, "</html>"
 
 def match(title, pattern):
     if pattern == "":
@@ -280,44 +311,43 @@ def matchcnt(year, papers, titlepattern):
     return matches
                 
 
-def printPapers(papers, years, printtype, outfile, titlepattern):
+def printPapers(papers, years, printtype, outfile, titlepattern, lang):
     if printtype == typelist[HTML_ONEFILE]:
-        printHTMLHeader(outfile)
+        printHTMLHeader(outfile, lang)
     
     sortedpapers = sorted(papers.values())
-
-    if printtype == typelist[CONSOLE]:
-        print >> outfile, ""
 
     for y in years:
         if matchcnt(y, papers, titlepattern) == 0:
             continue
         
         if printtype == typelist[HTML_YEARFILE]:
-            fname = str(y)+".html"
-            print "Writing data for year "+str(y)+" to file "+fname
+            fname = str(y) + ".html"
+            print "Writing data for year %s to file %s" % (y, fname)
             outfile = open(fname, "w")
         
         if printtype == typelist[HTML_ONEFILE] or printtype == typelist[HTML_YEARFILE]:
-            print >> outfile, '<b style="font-size: 12pt">'+str(y)+'</b><br><br><i>'
+            print >> outfile, "<h2>%s</h2><div>" % y
         else:
-            print>> outfile, "==== "+str(y)+" ====================================================================================\n"
+            print>> outfile, y
         
         for paper in sortedpapers:
             if paper.year == y and match(paper.title, titlepattern):
                 if printtype == typelist[HTML_ONEFILE] or printtype == typelist[HTML_YEARFILE]:
-                    paper.printHTML(outfile)
+                    paper.printHTML(outfile, lang)
                 else:
-                    paper.printConsole(outfile)
+                    paper.printConsole(outfile, lang)
 
         if printtype == typelist[HTML_ONEFILE] or printtype == typelist[HTML_YEARFILE]:
-            print >> outfile, "</i><br>"
+            print >> outfile, "</div>"
+        else:
+            print >> outfile, ""
             
         if printtype == typelist[HTML_YEARFILE]:
             outfile.close()
             
     if printtype == typelist[HTML_ONEFILE]:
-        printHTMLFooter(outfile)
+        printHTMLFooter(outfile, lang)
 
 def printStatistics(statfilename, papers, startyear, printall):
     stats = getStatistics(papers, startyear, printall)
@@ -330,7 +360,7 @@ def printStatistics(statfilename, papers, startyear, printall):
     statfile = open(statfilename, "w")
     print >> statfile, "Year",
     for c in printCategories:
-        print >> statfile, ";"+printCategoryNames[c],
+        print >> statfile, ";" + printCategoryNames[c],
     print >> statfile
     
     for y in sorted(stats.keys()):
@@ -340,7 +370,7 @@ def printStatistics(statfilename, papers, startyear, printall):
         print >> statfile, y,
         for c in printCategories:
             if c in stats[y]:
-                print >> statfile, ";"+str(stats[y][c]),
+                print >> statfile, ";" + str(stats[y][c]),
             else:
                 print >> statfile, ";0",
         print >> statfile
@@ -394,7 +424,7 @@ def main():
     papers = {}
     years = []
     for name in args:
-        papers, years = addPapers(name, papers, years, opts.type, opts.all)
+        papers, years = addPapers(name, papers, years, opts.type, opts.all, opts.lang)
 
     years.sort()
     if opts.year != 0:
@@ -403,12 +433,12 @@ def main():
     years.reverse()
     
     if opts.type == typelist[HTML_ONEFILE]:
-        print "Writing output to file "+opts.filename
+        print "Writing output to file " + opts.filename
         outfile = open(opts.filename, "w")
     else:
         outfile = sys.stdout
 
-    printPapers(papers, years, opts.type, outfile, opts.pattern)
+    printPapers(papers, years, opts.type, outfile, opts.pattern, opts.lang)
     
     if outfile != sys.stdout:
         outfile.close()
